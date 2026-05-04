@@ -13,5 +13,7 @@ struct ReaderApp: App {
         WindowGroup {
             ContentView()
         }
+        .defaultSize(width: 800, height: 600) // Initial window size
+        .windowResizability(.contentSize) // Make window match content
     }
 }
