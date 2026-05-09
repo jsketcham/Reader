@@ -13,7 +13,7 @@ import Synchronization
 import Cocoa
 
 enum READER_SEL : Int{
-    case dts = 1,ltc
+    case dts = 0,ltc
 }
 
 @Observable nonisolated class ReaderManager: ObservableObject {

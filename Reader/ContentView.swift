@@ -13,15 +13,24 @@ struct ContentView: View {
     
     var body: some View {
         VStack {
+            Text("ltc \(readerManager.host.reader.ringBuffer.ltc)")
+                .frame(width:100, alignment: .leading)
+                .padding(.bottom, 5)
+            Text("DTS")
+                .frame(width:100, alignment: .center)
             HStack {
-                Text("serial \(readerManager.host.reader.ringBuffer.serialNumber)")
-                    .frame(width:75, alignment: .leading)
+                //Spacer()
+                Text(" serial \(readerManager.host.reader.ringBuffer.serialNumber)")
+                    .frame(width:100, alignment: .leading)
                 Text("reel \(readerManager.host.reader.ringBuffer.reelNumber)")
                     .padding(.leading, 20)
-                    .frame(width:75, alignment: .leading)
+                    .frame(width:100, alignment: .leading)
                 Text("frame \(readerManager.host.reader.ringBuffer.frameNumber)")
-                    .frame(width:75, alignment: .leading)
+                    .frame(width:100, alignment: .leading)
+                //Spacer()
             }
+            .padding(5)
+            .border(Color.blue, width: 2)
             
             Picker("input", selection: $readerManager.selectedDevice) {
                 ForEach(readerManager.deviceDictionary.keys.sorted(), id: \.self) { device in

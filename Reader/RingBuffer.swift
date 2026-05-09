@@ -39,6 +39,7 @@ enum TCTYPE : Int{
 
 @Observable nonisolated class RingBuffer: ObservableObject {
     
+    var ltc = "01:00:00:00"
     var tcType : TCTYPE = .TC_30
     var serialNumber : UInt32 = 1234
     var frameNumber : UInt32 = 0{
@@ -78,16 +79,18 @@ enum TCTYPE : Int{
                 
             }
                         
-//            // display takes 1% of the MIPs
-//            ltc = String(format: "%x%x:%x%x:%x%x:%x%x",
-//                             self.ltcBytes[9] & 0x03,
-//                             self.ltcBytes[8] & 0x0f,
-//                             self.ltcBytes[7] & 0x07,
-//                             self.ltcBytes[6] & 0x0f,
-//                             self.ltcBytes[5] & 0x07,
-//                             self.ltcBytes[4] & 0x0f,
-//                             self.ltcBytes[3] & 0x03,
-//                             self.ltcBytes[2] & 0x0f)
+            if selectedReader == READER_SEL.ltc.rawValue{
+                // display takes 1% of the MIPs
+                ltc = String(format: "%x%x:%x%x:%x%x:%x%x",
+                             self.ltcBytes[9] & 0x03,
+                             self.ltcBytes[8] & 0x0f,
+                             self.ltcBytes[7] & 0x07,
+                             self.ltcBytes[6] & 0x0f,
+                             self.ltcBytes[5] & 0x07,
+                             self.ltcBytes[4] & 0x0f,
+                             self.ltcBytes[3] & 0x03,
+                             self.ltcBytes[2] & 0x0f)
+            }
             
 //            ub = String(format: "%x%x%x%x%x%x.%x%x",
 //                            (self.ltcBytes[9] >> 4) & 0x0f,
@@ -103,7 +106,7 @@ enum TCTYPE : Int{
         }
     }
     var reelNumber : UInt32 = 1
-    var selected : Int = 0
+    var selected : Int = 0  // left is 0, right is 1
 
     private var buffers : [[Float]] = Array(repeating: Array(repeating: 0, count: bufferSize), count: 2)
     private var inIndex = 0
@@ -132,8 +135,12 @@ enum TCTYPE : Int{
 
         return UInt32((inIndex - outIndex + bufferSize) % bufferSize)
     }
+    
+    var tiPut : TimeInterval = 0.0
 
     @discardableResult func put(_ abl: UnsafeMutableAudioBufferListPointer, nFrames: UInt32)->OSStatus{
+        
+        let now = Date()
         
         var framesToWrite = Int(min(framesAvailable(),nFrames))
         var inIndexCopy = inIndex
@@ -169,6 +176,8 @@ enum TCTYPE : Int{
         inIndex = inIndexCopy
         full = inIndex == outIndex
         
+        tiPut += Date().timeIntervalSince(now)
+        
         return noErr
     }
     
@@ -178,6 +187,8 @@ enum TCTYPE : Int{
     var ti : TimeInterval = 0.0
     var periodArray : [Int] = []
     private var dtsSamplesPerBit : Int = 67 // for 48K sample rate
+    private var samplesPerBit = 20   // bit cell number of samples
+    private var ltcBytes = [UInt8](repeating: 0, count: 10)
     private var ltcShifter : UInt32 = 0 // rx bits shift into this sync detect register
     private var ltcPhase = 0
     // local values, captured every frame at bit 0
@@ -193,6 +204,24 @@ enum TCTYPE : Int{
     }
     private var ticksPerSample : Double = AudioGetHostClockFrequency()/48000.0
     private var hostTime : UInt64 = 0   // from inputProc
+    
+    private func ltcToBinary()-> UInt32{
+        
+        // does not handle DF LTC
+        
+        let frs  = Int32(ltcBytes[2] & 0xf) + 10 * Int32(ltcBytes[3] & 0x3)
+        let secs = Int32(ltcBytes[4] & 0xf) + 10 * Int32(ltcBytes[5] & 0xf)
+        let mins = Int32(ltcBytes[6] & 0xf) + 10 * Int32(ltcBytes[7] & 0xf)
+        let hrs  = Int32(ltcBytes[8] & 0xf) + 10 * Int32(ltcBytes[9] & 0x7)
+        
+        let totalSecs = secs + 60 * mins + 60 * 60 * hrs
+        
+        switch tcType{
+            case .TC_24: return UInt32(frs + totalSecs * 24)
+            case .TC_25: return UInt32(frs + totalSecs * 25)
+            default:     return UInt32(frs + totalSecs * 30)   // ignore DF
+        }
+    }
 
     @discardableResult func decodeDts() -> OSStatus{
         
@@ -221,7 +250,7 @@ enum TCTYPE : Int{
             //print("\(frs)")
             
             if selected < buffers.count{
-                buffers[selected].withUnsafeMutableBufferPointer { ptr in
+                buffers[selected].withUnsafeMutableBufferPointer { ptr in       //left/right
                     
                     let src = ptr.baseAddress!.advanced(by: outIndexCopy)
                     var array = Array(UnsafeBufferPointer(start: src, count: Int(frs)))
@@ -251,6 +280,7 @@ enum TCTYPE : Int{
                     
                     // read DTS or LTC timecode
                     switch selectedReader{
+                        
                     case READER_SEL.dts.rawValue:
                         
                         let syncDiscrim = dtsSamplesPerBit * 3 / 2
@@ -326,7 +356,73 @@ enum TCTYPE : Int{
                         }
 
                         break
-                    default:    // ltc reader soon come
+                        
+                    default:    // ltc reader
+                        
+                        let discrim = samplesPerBit * 3 / 4
+
+                        var index = -1  // because we increment it immediately
+
+                        for period in periods{
+                            
+                            index += 1  // need the sample number, which is in result2
+                            
+                            if period < discrim {   // half of a 1
+                                
+                                ltcPhase += 1       // count half cells
+                                
+                                if ltcPhase & 1 != 1{
+                                    
+                                    ltcShifter >>= 1
+                                    ltcShifter |= 0x8000
+                                    
+                                    if ltcShifter == 0xbffc{
+                                        //print("sync detect \(ltcPhase)")
+                                        ltcPhase = 0    // the only path to 'case 0:' below
+                                    }
+                                }
+                                
+                            }else{  // 0
+                                
+                                if ltcPhase & 1 == 1{
+                                    // out of bit lock
+                                    ltcPhase &= ~1      // align to cell
+                                    ltcState = .IDLE    // because we were misaligned
+                                }
+                                
+                                ltcPhase += 2           // count cells
+                                ltcShifter >>= 1
+                            }
+                            
+                            if ltcPhase & 0xf == 0 && ltcPhase < 160{
+                                
+                                ltcBytes[ltcPhase >> 4] = UInt8(ltcShifter & 0xff)
+                                            
+                            }
+                            
+                            switch ltcPhase{
+                            case 0: // sync mark
+                                
+                                let tick = Int64(Float64(hostTime) + Float64(result2[index]) * ticksPerSample)
+                                ticksPerLtcFrame = tick - lastTick
+                                lastTick = tick
+                                
+                                frameNumber = ltcToBinary()  // see frameNumber.didSet(), processes syncItem, ltc, user bits
+
+                                switch ltcState {
+                                    case .IDLE:         ltcState = .SYNC_DETECT;    break
+                                    case .SYNC_DETECT:  ltcState = .LOCKED;         break
+                                    case .LOCKED:       ltcState = .SEQUENTIAL;     break
+                                    case .SEQUENTIAL:   break
+                                }
+
+                                break
+                            case 160: ltcState = .IDLE; ltcPhase = 0; ltc = "error"; break
+                            default:
+                                break
+                            }
+                        }
+
                         break
                     }
 

@@ -77,7 +77,8 @@ import Cocoa
 //        print(String(format: "peak: %3.2f", ringBuffer.peak))
         let ti = Date().timeIntervalSince(startDate)
         let percent = Float(ringBuffer.ti)/Float(ti) * 100.0
-        print(String(format: "readerService: %3.2f%%", percent))
+        let percent2 = Float(ringBuffer.tiPut)/Float(ti) * 100.0
+       print(String(format: "readerService: %3.2f%% put: %3.2f%%", percent,percent2))
         
 //        let counts = ringBuffer.periodArray.reduce(into: [:]) { counts, word in
 //            counts[word, default: 0] += 1
@@ -95,6 +96,7 @@ import Cocoa
             
             ringBuffer.peak = 0.0
             ringBuffer.ti = 0.0
+            ringBuffer.tiPut = 0.0
             ringBuffer.periodArray = []
             startDate = Date()  // for time interval calcs
             // Start pulling for audio data
